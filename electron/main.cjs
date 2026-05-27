@@ -71,6 +71,13 @@ const bundledAppIconPath = path.join(__dirname, '../build/icon.png');
 const extraResourceIconPath = path.join(process.resourcesPath, 'icon.png');
 const APP_ICON_PATH = fs.existsSync(bundledAppIconPath) ? bundledAppIconPath : extraResourceIconPath;
 const THUMBAR_ICON_DIR = path.join(__dirname, '../build/thumbar');
+const MACOS_TRAY_ICON_SVG = `
+<svg width="18" height="18" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <path d="M160 128C160 110 175 110 190 110H220C235 110 250 125 250 140V372C250 388 235 402 220 402H190C175 402 160 388 160 372V128Z" fill="black"/>
+  <path d="M240 110H340C380 110 400 140 400 170C400 200 360 200 340 200H250V110Z" fill="black"/>
+  <path d="M250 240H320C350 240 360 260 360 280C360 300 340 300 320 300H250V240Z" fill="black"/>
+</svg>
+`;
 
 function loadThumbarIcon(name) {
   if (!nativeImage || typeof nativeImage.createFromPath !== 'function') {
@@ -92,6 +99,36 @@ const THUMBAR_BUTTON_ICONS = process.platform === 'win32'
       next: loadThumbarIcon('next.png'),
     }
   : null;
+
+// macOS menu bar icons should be monochrome template images with transparent backgrounds.
+function createTrayIconImage() {
+  if (process.platform !== 'darwin') {
+    return APP_ICON_PATH;
+  }
+
+  if (!nativeImage || typeof nativeImage.createFromDataURL !== 'function') {
+    return APP_ICON_PATH;
+  }
+
+  const scaleFactor = screen?.getPrimaryDisplay?.().scaleFactor ?? 1;
+  const targetSize = scaleFactor > 1 ? 36 : 18;
+  const dataUrl = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(MACOS_TRAY_ICON_SVG)}`;
+  const trayImage = nativeImage.createFromDataURL(dataUrl).resize({
+    width: targetSize,
+    height: targetSize,
+    quality: 'best',
+  });
+
+  if (trayImage.isEmpty()) {
+    return APP_ICON_PATH;
+  }
+
+  if (typeof trayImage.setTemplateImage === 'function') {
+    trayImage.setTemplateImage(true);
+  }
+
+  return trayImage;
+}
 
 function readStoredBoolean(settingKey, fallback = false) {
   const value = store.get(settingKey);
@@ -422,7 +459,7 @@ function ensureTray() {
   }
 
   try {
-    appTray = new Tray(APP_ICON_PATH);
+    appTray = new Tray(createTrayIconImage());
   } catch (error) {
     console.error('[Electron] Failed to create tray icon', error);
     return null;
