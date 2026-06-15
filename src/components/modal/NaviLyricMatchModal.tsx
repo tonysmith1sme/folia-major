@@ -12,6 +12,11 @@ import { useSettingsUiStore } from '../../stores/useSettingsUiStore';
 import { searchQQLyrics, fetchQQLyrics } from '../../utils/lyrics/providers/qqLyricProvider';
 import { searchKugouLyrics, fetchKugouLyrics } from '../../utils/lyrics/providers/kugouLyricProvider';
 import { calculateMatchScore } from '../../utils/lyrics/matchScore';
+import {
+    getMatchResultAlbumName,
+    getMatchResultArtists,
+    getMatchResultCoverUrl,
+} from './lyricMatchResultHelpers';
 
 export interface NavidromeMatchData {
     matchedSongId?: number;
@@ -261,6 +266,9 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
     };
 
     const coverUrl = song.album?.picUrl || song.al?.picUrl || song.navidromeData?.coverArtUrl || null;
+    const selectedCoverUrl = getMatchResultCoverUrl(selectedResult, source);
+    const selectedArtists = getMatchResultArtists(selectedResult);
+    const selectedAlbum = getMatchResultAlbumName(selectedResult);
 
     return (
         <div data-folia-keyboard-window="true" className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xl flex items-center justify-center p-6">
@@ -328,23 +336,34 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                                 </div>
                             ) : (
                                 <div className="space-y-1.5">
-                                    {searchResults.map((result) => (
-                                        <div key={result.id} onClick={() => setSelectedResult(result)} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border ${selectedResult?.id === result.id ? resultItemSelected : resultItemBg}`}>
-                                            <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-800">
-                                                {result.al?.picUrl ? <img src={result.al.picUrl.replace('http:', 'https:')} alt="" className="w-full h-full object-cover" /> : <Music size={16} className="opacity-20 m-auto" />}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</span>
-                                                    <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
-                                                        {calculateMatchScore(songInfo, result)}%
-                                                    </span>
+                                    {searchResults.map((result) => {
+                                        const resultCoverUrl = getMatchResultCoverUrl(result, source);
+                                        const resultArtists = getMatchResultArtists(result);
+                                        const resultAlbum = getMatchResultAlbumName(result);
+                                        return (
+                                            <div key={result.id} onClick={() => setSelectedResult(result)} className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border ${selectedResult?.id === result.id ? resultItemSelected : resultItemBg}`}>
+                                                <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-zinc-800">
+                                                    {resultCoverUrl ? (
+                                                        <img src={resultCoverUrl} alt={result.name} className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center">
+                                                            <Music size={16} className="opacity-20" />
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <div className={`text-xs truncate ${textSecondary}`}>{result.ar?.map(a => a.name).join(', ')} · {result.al?.name}</div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</span>
+                                                        <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
+                                                            {calculateMatchScore(songInfo, result)}%
+                                                        </span>
+                                                    </div>
+                                                    <div className={`text-xs truncate ${textSecondary}`}>{[resultArtists, resultAlbum].filter(Boolean).join(' · ')}</div>
+                                                </div>
+                                                {selectedResult?.id === result.id && <Check size={16} className="text-blue-400 flex-shrink-0" />}
                                             </div>
-                                            {selectedResult?.id === result.id && <Check size={16} className="text-blue-400 flex-shrink-0" />}
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -354,21 +373,16 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                     <div className="w-[38%] flex flex-col items-center justify-center px-5 py-6">
                         <div className="flex flex-col items-center text-center w-full space-y-4">
                             <div className="w-40 h-40 rounded-2xl overflow-hidden bg-zinc-800 shadow-lg flex-shrink-0">
-                                {coverUrl ? <img src={coverUrl} alt="Cover" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center"><Music size={40} className="opacity-10" /></div>}
+                                {selectedCoverUrl || coverUrl ? <img src={selectedCoverUrl || coverUrl || ''} alt="Cover" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center"><Music size={40} className="opacity-10" /></div>}
                             </div>
                             <div className="space-y-4 w-full mt-2">
                                 <div>
-                                    <h3 className={`text-lg font-bold line-clamp-2 ${textPrimary}`}>{song.name}</h3>
-                                    <div className={`text-sm opacity-60 font-medium ${textPrimary} mt-1`}>{navidromeArtist}</div>
-                                    <div className={`text-sm opacity-40 ${textPrimary} mt-1`}>{navidromeAlbum}</div>
+                                    <h3 className={`text-lg font-bold line-clamp-2 ${textPrimary}`}>{selectedResult ? formatSongName(selectedResult) : song.name}</h3>
+                                    <div className={`text-sm opacity-60 font-medium ${textPrimary} mt-1`}>{selectedResult ? selectedArtists : navidromeArtist}</div>
+                                    <div className={`text-sm opacity-40 ${textPrimary} mt-1`}>{selectedResult ? selectedAlbum : navidromeAlbum}</div>
                                 </div>
                                 {selectedResult && (
                                     <div className="flex flex-col gap-2 pt-2 items-center">
-                                        {source !== 'netease' && (
-                                            <div className={`text-xs px-2.5 py-1 rounded-md max-w-[240px] text-center ${isDaylight ? 'bg-amber-50 text-amber-700' : 'bg-amber-950/40 text-amber-300 border border-amber-900/50'}`}>
-                                                {source === 'qq' ? 'QQ 音乐' : '酷狗音乐'}仅提供歌词，不覆盖封面与元数据
-                                            </div>
-                                        )}
                                         <div className="flex items-center justify-center gap-2">
                                             <span className={`text-xs ${textSecondary}`}>匹配状态</span>
                                             <span className={`text-xs px-2 py-0.5 rounded-full ${lyricsSource === 'online' ? (isDaylight ? 'bg-blue-500/10 text-blue-600' : 'bg-blue-500/20 text-blue-300') : (isDaylight ? 'bg-orange-500/10 text-orange-600' : 'bg-orange-500/20 text-orange-300')}`}>

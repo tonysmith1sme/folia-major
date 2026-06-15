@@ -10,6 +10,15 @@ import { useSettingsUiStore } from '../../stores/useSettingsUiStore';
 import { searchQQLyrics, fetchQQLyrics } from '../../utils/lyrics/providers/qqLyricProvider';
 import { searchKugouLyrics, fetchKugouLyrics } from '../../utils/lyrics/providers/kugouLyricProvider';
 import { calculateMatchScore } from '../../utils/lyrics/matchScore';
+import {
+    getLyricMatchSourceLabel,
+    getMatchResultAlbumId,
+    getMatchResultAlbumName,
+    getMatchResultArtists,
+    getMatchResultCoverUrl,
+    sourceSupportsCover,
+    type LyricMatchSource,
+} from './lyricMatchResultHelpers';
 
 interface LyricMatchModalProps {
     song: LocalSong;
@@ -46,7 +55,7 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
     const [isMatching, setIsMatching] = useState(false);
 
     const enableAlternativeLyricSources = useSettingsUiStore(state => state.enableAlternativeLyricSources);
-    const [source, setSource] = useState<'netease' | 'qq' | 'kugou'>('netease');
+    const [source, setSource] = useState<LyricMatchSource>('netease');
 
     // Online data toggle state (dots)
     const [lyricsSource, setLyricsSource] = useState<'local' | 'embedded' | 'online' | undefined>(song.lyricsSource);
@@ -68,23 +77,18 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
     // When a search result is selected, update the preview
     useEffect(() => {
         if (selectedResult) {
-            if (source !== 'netease') {
-                setEditArtist(song.embeddedArtist || song.artist || '');
-                setEditAlbum(song.embeddedAlbum || song.album || '');
-            } else {
-                const onlineArtist = selectedResult.ar?.map(a => a.name).join(', ') || '';
-                const onlineAlbum = selectedResult.al?.name || selectedResult.album?.name || '';
-                setEditArtist(useOnlineMetadata ? onlineArtist : (song.embeddedArtist || song.artist || onlineArtist));
-                setEditAlbum(useOnlineMetadata ? onlineAlbum : (song.embeddedAlbum || song.album || onlineAlbum));
-            }
+            const onlineArtist = getMatchResultArtists(selectedResult);
+            const onlineAlbum = getMatchResultAlbumName(selectedResult);
+            setEditArtist(useOnlineMetadata ? onlineArtist : (song.embeddedArtist || song.artist || onlineArtist));
+            setEditAlbum(useOnlineMetadata ? onlineAlbum : (song.embeddedAlbum || song.album || onlineAlbum));
         }
-    }, [selectedResult, source]);
+    }, [selectedResult, source, useOnlineMetadata, song.embeddedArtist, song.artist, song.embeddedAlbum, song.album]);
 
     // Update metadata fields when toggling online metadata
     useEffect(() => {
-        if (!selectedResult || source !== 'netease') return;
-        const onlineArtist = selectedResult.ar?.map(a => a.name).join(', ') || '';
-        const onlineAlbum = selectedResult.al?.name || selectedResult.album?.name || '';
+        if (!selectedResult) return;
+        const onlineArtist = getMatchResultArtists(selectedResult);
+        const onlineAlbum = getMatchResultAlbumName(selectedResult);
         if (useOnlineMetadata) {
             setEditArtist(onlineArtist);
             setEditAlbum(onlineAlbum);
@@ -92,22 +96,14 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
             setEditArtist(song.embeddedArtist || song.artist || onlineArtist);
             setEditAlbum(song.embeddedAlbum || song.album || onlineAlbum);
         }
-    }, [useOnlineMetadata, source]);
+    }, [useOnlineMetadata, selectedResult, song.embeddedArtist, song.artist, song.embeddedAlbum, song.album]);
 
     // Derive preview cover URL with proper ObjectURL lifecycle management
     const [previewCoverUrl, setPreviewCoverUrl] = useState<string | null>(null);
     useEffect(() => {
         let objectUrl: string | null = null;
 
-        if (source !== 'netease') {
-            // Local cover preview for non-netease source
-            if (song.embeddedCover) {
-                objectUrl = URL.createObjectURL(song.embeddedCover);
-                setPreviewCoverUrl(objectUrl);
-            } else {
-                setPreviewCoverUrl(song.matchedCoverUrl || null);
-            }
-        } else if (!selectedResult) {
+        if (!selectedResult) {
             // Show current state
             if (song.embeddedCover) {
                 objectUrl = URL.createObjectURL(song.embeddedCover);
@@ -116,9 +112,8 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
                 setPreviewCoverUrl(song.matchedCoverUrl || null);
             }
         } else if (useOnlineCover) {
-            setPreviewCoverUrl(
-                (selectedResult.al?.picUrl || selectedResult.album?.picUrl || '').replace('http:', 'https:') || null
-            );
+            const selectedCoverUrl = getMatchResultCoverUrl(selectedResult, source);
+            setPreviewCoverUrl(selectedCoverUrl || song.matchedCoverUrl || null);
         } else {
             // Local cover
             if (song.embeddedCover) {
@@ -138,9 +133,7 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
     const lyricsSourceLabel = useMemo(() => {
         if (lyricsSource === 'online') {
             const src = selectedResult ? source : (song.matchedLyricsSource || 'netease');
-            if (src === 'qq') return 'QQ 音乐';
-            if (src === 'kugou') return '酷狗音乐';
-            return '网易云音乐';
+            return getLyricMatchSourceLabel(src);
         }
         if (lyricsSource === 'embedded') return t('localMusic.statusEmbedded');
         if (lyricsSource === 'local') return t('localMusic.statusLocal');
@@ -292,35 +285,21 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
                 song.matchedLyrics = parsedLyrics || undefined;
             }
 
-            if (source === 'netease') {
-                // Save cover if online is selected
-                if (useOnlineCover) {
-                    const coverUrl = selectedResult.al?.picUrl || selectedResult.album?.picUrl;
-                    if (coverUrl) {
-                        song.matchedCoverUrl = coverUrl.replace('http:', 'https:');
-                    }
-                } else {
-                    delete song.matchedCoverUrl;
+            const selectedCoverUrl = getMatchResultCoverUrl(selectedResult, source);
+            if (useOnlineCover) {
+                if (selectedCoverUrl) {
+                    song.matchedCoverUrl = selectedCoverUrl;
                 }
-
-                // Save metadata - always save the user-edited values
-                song.matchedArtists = editArtist;
-                song.matchedAlbumId = selectedResult.al?.id || selectedResult.album?.id;
-                song.matchedAlbumName = editAlbum;
-
-                // Persist user override preferences
-                song.useOnlineCover = useOnlineCover;
-                song.useOnlineMetadata = useOnlineMetadata;
             } else {
-                // QQ or Kugou: only provide lyrics, delete other online metadata overrides
                 delete song.matchedCoverUrl;
-                delete song.matchedArtists;
-                delete song.matchedAlbumId;
-                delete song.matchedAlbumName;
-
-                song.useOnlineCover = false;
-                song.useOnlineMetadata = false;
             }
+
+            // Save metadata - always save the user-edited values.
+            song.matchedArtists = editArtist;
+            song.matchedAlbumId = getMatchResultAlbumId(selectedResult);
+            song.matchedAlbumName = editAlbum;
+            song.useOnlineCover = Boolean(useOnlineCover && (selectedCoverUrl || song.matchedCoverUrl));
+            song.useOnlineMetadata = useOnlineMetadata;
 
             song.lyricsSource = lyricsSource;
             song.hasManualLyricSelection = true;
@@ -329,8 +308,8 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
             // Remove old cached cover to force refresh
             await removeFromCache(`cover_local_${song.id}`);
 
-            // Fetch and cache the cover blob so it persists across refreshes (only if netease source and useOnlineCover)
-            if (source === 'netease' && useOnlineCover && song.matchedCoverUrl) {
+            // Fetch and cache the cover blob so it persists across refreshes.
+            if (song.useOnlineCover && song.matchedCoverUrl) {
                 try {
                     const coverResponse = await fetch(song.matchedCoverUrl, { mode: 'cors' });
                     const coverBlob = await coverResponse.blob();
@@ -463,44 +442,49 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
                                 </div>
                             ) : (
                                 <div className="space-y-1.5">
-                                    {searchResults.map((result) => (
-                                        <div
-                                            key={result.id}
-                                            onClick={() => setSelectedResult(result)}
-                                            className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border ${selectedResult?.id === result.id
-                                                ? resultItemSelected
-                                                : resultItemBg
-                                                }`}
-                                        >
-                                            <div className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
-                                                {result.al?.picUrl || result.album?.picUrl ? (
-                                                    <img
-                                                        src={(result.al?.picUrl || result.album?.picUrl || '').replace('http:', 'https:')}
-                                                        alt={result.name}
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                ) : (
-                                                    <div className="w-full h-full flex items-center justify-center">
-                                                        <Music size={16} className="opacity-20" />
+                                    {searchResults.map((result) => {
+                                        const resultCoverUrl = getMatchResultCoverUrl(result, source);
+                                        const resultArtists = getMatchResultArtists(result);
+                                        const resultAlbum = getMatchResultAlbumName(result);
+                                        return (
+                                            <div
+                                                key={result.id}
+                                                onClick={() => setSelectedResult(result)}
+                                                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all border ${selectedResult?.id === result.id
+                                                    ? resultItemSelected
+                                                    : resultItemBg
+                                                    }`}
+                                            >
+                                                <div className="w-10 h-10 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
+                                                    {resultCoverUrl ? (
+                                                        <img
+                                                            src={resultCoverUrl}
+                                                            alt={result.name}
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-full h-full flex items-center justify-center">
+                                                            <Music size={16} className="opacity-20" />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</span>
+                                                        <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
+                                                            {calculateMatchScore(songInfo, result)}%
+                                                        </span>
                                                     </div>
+                                                    <div className={`text-xs truncate ${textSecondary}`}>
+                                                        {[resultArtists, resultAlbum].filter(Boolean).join(' · ')}
+                                                    </div>
+                                                </div>
+                                                {selectedResult?.id === result.id && (
+                                                    <Check size={16} className="text-blue-400 flex-shrink-0" />
                                                 )}
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</span>
-                                                    <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
-                                                        {calculateMatchScore(songInfo, result)}%
-                                                    </span>
-                                                </div>
-                                                <div className={`text-xs truncate ${textSecondary}`}>
-                                                    {result.ar?.map(a => a.name).join(', ')} · {result.al?.name || result.album?.name}
-                                                </div>
-                                            </div>
-                                            {selectedResult?.id === result.id && (
-                                                <Check size={16} className="text-blue-400 flex-shrink-0" />
-                                            )}
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -525,37 +509,38 @@ const LyricMatchModal: React.FC<LyricMatchModalProps> = ({ song, onClose, onMatc
                             </div>
 
                             {/* Indicator Dots / Info note */}
-                            {source !== 'netease' ? (
+                            {source === 'kugou' ? (
                                 <div className={`text-xs px-3 py-1.5 rounded-lg border text-center font-medium ${isDaylight ? 'bg-amber-500/5 border-amber-500/10 text-amber-600' : 'bg-amber-500/10 border-amber-500/20 text-amber-300'}`}>
-                                    {source === 'qq' ? 'QQ 音乐' : '酷狗音乐'}仅提供歌词，不覆盖封面与元数据
+                                    {t('localMusic.kugouNoCover')}
                                 </div>
                             ) : null}
 
                             <div className="flex items-center gap-4">
-                                {source === 'netease' && (
-                                    <>
-                                        <button
-                                            onClick={() => setUseOnlineCover(!useOnlineCover)}
-                                            className="flex items-center gap-1.5 group"
-                                            title={t('localMusic.coverSource')}
-                                        >
-                                            <div className={`w-2 h-2 rounded-full transition-all duration-200 ${useOnlineCover ? dotActive + ' shadow-sm shadow-blue-400/50' : dotBase} group-hover:scale-150`} />
-                                            <span className={`text-[11px] ${useOnlineCover ? (isDaylight ? 'text-blue-600 font-medium' : 'text-blue-300 font-medium') : textSecondary} transition-colors`}>
-                                                {t('localMusic.coverSource')}
-                                            </span>
-                                        </button>
-                                        <button
-                                            onClick={() => setUseOnlineMetadata(!useOnlineMetadata)}
-                                            className="flex items-center gap-1.5 group"
-                                            title={t('localMusic.metadataSource')}
-                                        >
-                                            <div className={`w-2 h-2 rounded-full transition-all duration-200 ${useOnlineMetadata ? dotActive + ' shadow-sm shadow-blue-400/50' : dotBase} group-hover:scale-150`} />
-                                            <span className={`text-[11px] ${useOnlineMetadata ? (isDaylight ? 'text-blue-600 font-medium' : 'text-blue-300 font-medium') : textSecondary} transition-colors`}>
-                                                {t('localMusic.metadataSource')}
-                                            </span>
-                                        </button>
-                                    </>
-                                )}
+                                <button
+                                    onClick={() => {
+                                        if (sourceSupportsCover(source, selectedResult)) {
+                                            setUseOnlineCover(!useOnlineCover);
+                                        }
+                                    }}
+                                    disabled={!sourceSupportsCover(source, selectedResult)}
+                                    className="flex items-center gap-1.5 group disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={t('localMusic.coverSource')}
+                                >
+                                    <div className={`w-2 h-2 rounded-full transition-all duration-200 ${useOnlineCover && sourceSupportsCover(source, selectedResult) ? dotActive + ' shadow-sm shadow-blue-400/50' : dotBase} group-hover:scale-150`} />
+                                    <span className={`text-[11px] ${useOnlineCover && sourceSupportsCover(source, selectedResult) ? (isDaylight ? 'text-blue-600 font-medium' : 'text-blue-300 font-medium') : textSecondary} transition-colors`}>
+                                        {t('localMusic.coverSource')}
+                                    </span>
+                                </button>
+                                <button
+                                    onClick={() => setUseOnlineMetadata(!useOnlineMetadata)}
+                                    className="flex items-center gap-1.5 group"
+                                    title={t('localMusic.metadataSource')}
+                                >
+                                    <div className={`w-2 h-2 rounded-full transition-all duration-200 ${useOnlineMetadata ? dotActive + ' shadow-sm shadow-blue-400/50' : dotBase} group-hover:scale-150`} />
+                                    <span className={`text-[11px] ${useOnlineMetadata ? (isDaylight ? 'text-blue-600 font-medium' : 'text-blue-300 font-medium') : textSecondary} transition-colors`}>
+                                        {t('localMusic.metadataSource')}
+                                    </span>
+                                </button>
                                 <button
                                     onClick={() => setLyricsSource(lyricsSource === 'online' ? undefined : 'online')}
                                     className="flex items-center gap-1.5 group"

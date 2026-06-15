@@ -656,6 +656,7 @@ export default {
     "lyricsSource": "Lyrics",
     "coverSource": "Cover",
     "metadataSource": "Metadata",
+    "kugouNoCover": "Kugou does not provide cover art, so local cover art will be kept.",
     "artistLabel": "Artist",
     "albumLabel": "Album",
     "noSelection": "Select a song on the left",

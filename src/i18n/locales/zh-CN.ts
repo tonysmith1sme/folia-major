@@ -658,6 +658,7 @@ export default {
     "lyricsSource": "歌词",
     "coverSource": "封面",
     "metadataSource": "元数据",
+    "kugouNoCover": "酷狗音乐暂不提供封面，选择封面时会保留本地封面。",
     "artistLabel": "歌手",
     "albumLabel": "专辑",
     "noSelection": "请在左侧选择一首歌曲",
