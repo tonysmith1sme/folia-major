@@ -203,6 +203,10 @@ export default function App() {
     const queueScrollRef = useRef<HTMLDivElement>(null);
     const shouldAutoPlay = useRef(false);
     const currentSongRef = useRef<number | null>(null);
+    const currentSongFullRef = useRef<SongResult | null>(null);
+    useEffect(() => {
+        currentSongFullRef.current = currentSong;
+    }, [currentSong]);
     const playbackRequestIdRef = useRef(0);
     const playbackAutoSkipCountRef = useRef(0);
     const pendingUnavailableSkipTimerRef = useRef<number | null>(null);
@@ -335,7 +339,7 @@ export default function App() {
     } = appPreferences;
 
     const setLyrics = useMemo(
-        () => createLyricsSetter(setLyricsState, lyricFilterPattern),
+        () => createLyricsSetter(setLyricsState, lyricFilterPattern, currentSongFullRef),
         [lyricFilterPattern],
     );
 

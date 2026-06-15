@@ -10,6 +10,7 @@ import { SongResult } from '../../../types';
 import { parseLyricsByFormat } from '../parserCore';
 import { detectTimedLyricFormat } from '../formatDetection';
 import { krcDecrypt } from './krcDecrypt';
+import { applyDetectedChorusEffects } from '../chorusEffects';
 
 const isElectron = typeof window !== 'undefined' && (window as any).electron;
 
@@ -271,20 +272,21 @@ export async function fetchKugouLyrics(song: SongResult): Promise<any | null> {
     }
 
     let lyricText = '';
-    let format: 'lrc' | 'enhanced-lrc' | 'vtt' | 'yrc' | 'qrc' = 'lrc';
+    let format: 'lrc' | 'enhanced-lrc' | 'vtt' | 'yrc' | 'qrc' | 'krc' = 'lrc';
 
     if (downloadRes.contenttype === 2) {
       lyricText = new TextDecoder('utf-8').decode(bytes);
       format = detectTimedLyricFormat(lyricText);
     } else {
       lyricText = await krcDecrypt(bytes);
-      // Kugou KRC lyrics can be parsed as enhanced-lrc or standard lrc depending on brackets.
-      // KRC uses tags like [1000,2000]<1000,500,0>words... which matches enhanced-lrc angle format.
-      format = 'enhanced-lrc';
+      format = 'krc';
     }
 
     const parsed = parseLyricsByFormat(format, lyricText, '');
-    return parsed;
+    if (parsed) {
+      parsed.isWordByWord = format === 'krc' || format === 'enhanced-lrc';
+    }
+    return applyDetectedChorusEffects(parsed, lyricText);
   } catch (error) {
     console.error('[Kugou] Fetch lyrics failed:', error);
     return null;

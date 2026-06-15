@@ -675,6 +675,7 @@ type SettingsUiState = {
     staticMode: boolean;
     disableHomeDynamicBackground: boolean;
     enableAlternativeLyricSources: boolean;
+    autoUseBestLyric: boolean;
     hidePlayerProgressBar: boolean;
     hidePlayerTranslationSubtitle: boolean;
     hidePlayerRightPanelButton: boolean;
@@ -755,6 +756,7 @@ type SettingsUiState = {
     handleToggleStaticMode: (enable: boolean) => void;
     handleToggleDisableHomeDynamicBackground: (disable: boolean) => void;
     handleToggleAlternativeLyricSources: (enable: boolean) => void;
+    handleToggleAutoUseBestLyric: (enable: boolean) => void;
     handleToggleHidePlayerProgressBar: (enable: boolean) => void;
     handleToggleHidePlayerTranslationSubtitle: (enable: boolean) => void;
     handleToggleHidePlayerRightPanelButton: (enable: boolean) => void;
@@ -829,6 +831,7 @@ export const useSettingsUiStore = create<SettingsUiState>((set, get) => ({
     staticMode: getStoredBoolean('static_mode', false),
     disableHomeDynamicBackground: readStoredDisableHomeDynamicBackground(),
     enableAlternativeLyricSources: getStoredBoolean('enable_alternative_lyric_sources', false),
+    autoUseBestLyric: getStoredBoolean('auto_use_best_lyric', false),
     hidePlayerProgressBar: getStoredBoolean('hide_player_progress_bar', false),
     hidePlayerTranslationSubtitle: getStoredBoolean('hide_player_translation_subtitle', false),
     hidePlayerRightPanelButton: getStoredBoolean('hide_player_right_panel_button', false),
@@ -975,6 +978,14 @@ export const useSettingsUiStore = create<SettingsUiState>((set, get) => ({
         notify(get, {
             type: 'info',
             text: enable ? '更多歌词源已开启' : '更多歌词源已关闭',
+        });
+    },
+    handleToggleAutoUseBestLyric: (enable) => {
+        setStoredBoolean('auto_use_best_lyric', enable);
+        set({ autoUseBestLyric: enable });
+        notify(get, {
+            type: 'info',
+            text: enable ? '自动使用最佳歌词已开启' : '自动使用最佳歌词已关闭',
         });
     },
     handleToggleHidePlayerProgressBar: (enable) => {

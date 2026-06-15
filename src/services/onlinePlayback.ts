@@ -8,7 +8,9 @@ import { migrateLyricDataRenderHints } from '../utils/lyrics/renderHints';
 import { processNeteaseLyrics } from '../utils/lyrics/neteaseProcessing';
 import { detectTimedLyricFormat } from '../utils/lyrics/formatDetection';
 import { parseLyricsAsync } from '../utils/lyrics/workerClient';
-import { loadOnlineLyricsState, resolveOnlineLyrics } from '../utils/onlineLyricsState';
+import { loadOnlineLyricsState, resolveOnlineLyrics, saveOnlineLyricsState } from '../utils/onlineLyricsState';
+import { useSettingsUiStore } from '../stores/useSettingsUiStore';
+import { autoMatchBestLyric } from '../utils/lyrics/autoMatchBestLyric';
 
 const normalizeAudioUrl = (url?: string | null) => {
     if (!url) return null;
@@ -141,11 +143,38 @@ export async function loadOnlineSongLyrics(
 
     if (!isCurrent()) return;
 
-    const resolvedLyrics = resolveOnlineLyrics(onlineLyricsState, parsedLyrics);
+    let resolvedLyrics = resolveOnlineLyrics(onlineLyricsState, parsedLyrics);
+    let finalState = onlineLyricsState;
+
+    const settings = useSettingsUiStore.getState();
+    if ((!resolvedLyrics || !resolvedLyrics.isWordByWord) && settings.enableAlternativeLyricSources && settings.autoUseBestLyric) {
+        try {
+            const artistName = song.artists?.map(a => a.name).join(', ') || '';
+            const bestMatch = await autoMatchBestLyric(song.name, artistName, song.duration || song.dt || 0);
+            if (bestMatch && (bestMatch.source === 'qq' || bestMatch.source === 'kugou')) {
+                const overrideState: OnlineLyricsState = {
+                    lyricsSource: 'online',
+                    matchedSongId: song.id,
+                    matchedLyrics: bestMatch.lyrics,
+                    matchedLyricsSource: bestMatch.source,
+                    useOnlineLyrics: true,
+                };
+                await saveOnlineLyricsState(song, overrideState);
+                resolvedLyrics = bestMatch.lyrics;
+                finalState = overrideState;
+                onStateChange?.(overrideState);
+            }
+        } catch (error) {
+            console.warn('[OnlinePlayback] Failed to auto-match best lyric:', error);
+        }
+    }
+
+    if (!isCurrent()) return;
+
     const resolvedText = resolvedLyrics?.lines.map(line => line.fullText).join('\n') ?? '';
     onPureMusicChange?.(
-        onlineLyricsState?.lyricsSource === 'online' && typeof onlineLyricsState.matchedIsPureMusic === 'boolean'
-            ? onlineLyricsState.matchedIsPureMusic
+        finalState?.lyricsSource === 'online' && typeof finalState.matchedIsPureMusic === 'boolean'
+            ? finalState.matchedIsPureMusic
             : (resolvedLyrics ? isPureMusicLyricText(resolvedText) : processed.isPureMusic)
     );
 
@@ -156,6 +185,6 @@ export async function loadOnlineSongLyrics(
     }
 
     onLyrics(resolvedLyrics);
-    saveToCache(lyricCacheKey, parsedLyrics);
+    saveToCache(lyricCacheKey, resolvedLyrics);
     onDone();
 }

@@ -21,6 +21,7 @@ export interface LyricData {
   lines: Line[];
   title?: string;
   artist?: string;
+  isWordByWord?: boolean;
 }
 
 export interface Theme {
@@ -525,6 +526,7 @@ export interface OnlineLyricsState {
   onlineOverrideLyrics?: LyricData | null;
   matchedSongId?: number;
   matchedIsPureMusic?: boolean;
+  matchedLyricsSource?: 'netease' | 'qq' | 'kugou';
 }
 
 export interface SearchResponse {
@@ -577,6 +579,7 @@ export interface LocalSong {
   hasManualLyricSelection?: boolean;
   folderName?: string; // Name of the folder if imported via folder import
   noAutoMatch?: boolean; // If true, do not attempt to auto-match metadata
+  matchedLyricsSource?: 'netease' | 'qq' | 'kugou';
 
   // User preferences for online data override (set via LyricMatchModal)
   lyricsSource?: 'local' | 'embedded' | 'online';  // Explicit lyrics source selection; undefined = default priority (local > embedded > online)

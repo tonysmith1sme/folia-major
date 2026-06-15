@@ -317,6 +317,8 @@ export default {
     "disableHomeDynamicBackgroundWarning": "Off by default, so dynamic background remains enabled unless you turn this on.",
     "enableAlternativeLyricSources": "More Lyric Sources",
     "enableAlternativeLyricSourcesDesc": "Display alternative lyric sources (QQ Music, Kugou Music) in the lyric matching panel, supporting decryption of QRC/KRC lyrics.",
+    "autoUseBestLyric": "Auto Use Best Lyric",
+    "autoUseBestLyricDesc": "Automatically search NetEase, QQ, and Kugou lyrics, prioritizing word-by-word lyrics with perfect timing matches.",
     "labHidePlayerUi": "Hide Player UI",
     "labHidePlayerUiDesc": "Only applies on the player page. You can hide the bottom control bar, bottom subtitle, and right-side button separately. After hiding the right-side button, you can still use P to open or close the right panel.",
     "hidePlayerProgressBar": "Hide player bottom control bar",

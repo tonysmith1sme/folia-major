@@ -56,6 +56,10 @@ export const processNeteaseLyrics = async (
         resolveLyricProcessingOptions(options)
     );
 
+    if (lyrics) {
+        lyrics.isWordByWord = !!payload.yrcLrc;
+    }
+
     if (lyrics && payload.mainLrc) {
         let chorusApplied = false;
         if (options.songId) {

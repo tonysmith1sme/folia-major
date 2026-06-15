@@ -9,6 +9,7 @@ import { SongResult } from '../../../types';
 import { parseLyricsByFormat } from '../parserCore';
 import { detectTimedLyricFormat } from '../formatDetection';
 import { qrcDecrypt } from './qrcDecrypt';
+import { applyDetectedChorusEffects } from '../chorusEffects';
 
 const isElectron = typeof window !== 'undefined' && (window as any).electron;
 
@@ -184,7 +185,10 @@ export async function fetchQQLyrics(song: SongResult): Promise<any | null> {
     const format = isQrc ? 'qrc' : detectTimedLyricFormat(decryptedLyric);
 
     const parsed = parseLyricsByFormat(format, decryptedLyric, decryptedTrans);
-    return parsed;
+    if (parsed) {
+      parsed.isWordByWord = isQrc;
+    }
+    return applyDetectedChorusEffects(parsed, decryptedLyric);
   } catch (error) {
     console.error('[QQMusic] Fetch lyrics failed:', error);
     return null;

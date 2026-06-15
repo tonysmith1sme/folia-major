@@ -317,6 +317,8 @@ export default {
     "disableHomeDynamicBackgroundWarning": "默认情况下允许动态背景。",
     "enableAlternativeLyricSources": "更多歌词源",
     "enableAlternativeLyricSourcesDesc": "在歌词匹配面板中显示备选歌词源（QQ音乐、酷狗音乐），支持加载与解密 QRC/KRC 歌词。",
+    "autoUseBestLyric": "自动使用最佳歌词",
+    "autoUseBestLyricDesc": "自动检索网易云、QQ、酷狗歌词，若存在时值完美匹配的逐字歌词则自动优先采用。",
     "labHidePlayerUi": "隐藏播放页 UI",
     "labHidePlayerUiDesc": "仅对播放页生效。可分别隐藏底部控制条、底部字幕和右侧按钮；隐藏右侧按钮后仍可使用 P 键打开或关闭右侧面板。",
     "hidePlayerProgressBar": "隐藏底部控制条",

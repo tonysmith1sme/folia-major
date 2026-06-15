@@ -8,6 +8,10 @@ import { saveToCache, getFromCacheWithMigration } from '../../services/db';
 import { formatSongName } from '../../utils/songNameFormatter';
 import { migrateMatchedLyricsCarrierRenderHints } from '../../utils/lyrics/storageMigration';
 import { processNeteaseLyrics } from '../../utils/lyrics/neteaseProcessing';
+import { useSettingsUiStore } from '../../stores/useSettingsUiStore';
+import { searchQQLyrics, fetchQQLyrics } from '../../utils/lyrics/providers/qqLyricProvider';
+import { searchKugouLyrics, fetchKugouLyrics } from '../../utils/lyrics/providers/kugouLyricProvider';
+import { calculateMatchScore } from '../../utils/lyrics/matchScore';
 
 export interface NavidromeMatchData {
     matchedSongId?: number;
@@ -23,6 +27,7 @@ export interface NavidromeMatchData {
     useOnlineMetadata?: boolean;
     noAutoMatch?: boolean;
     hasManualLyricSelection?: boolean;
+    matchedLyricsSource?: 'netease' | 'qq' | 'kugou';
 }
 
 interface NaviLyricMatchModalProps {
@@ -63,9 +68,19 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
 
     // Online data toggle state
     const [lyricsSource, setLyricsSource] = useState<'navi' | 'online'>('online');
+    const enableAlternativeLyricSources = useSettingsUiStore(state => state.enableAlternativeLyricSources);
+    const [source, setSource] = useState<'netease' | 'qq' | 'kugou'>('netease');
 
     const navidromeArtist = song.artists?.map(a => a.name).join(', ') || song.ar?.map(a => a.name).join(', ') || '';
     const navidromeAlbum = song.album?.name || song.al?.name || '';
+
+    const songInfo = useMemo(() => {
+        return {
+            title: song.name || '',
+            artist: navidromeArtist || '',
+            durationMs: (song.duration || song.dt || 0) * 1000,
+        };
+    }, [song, navidromeArtist]);
 
     // Prepare component data
     useEffect(() => {
@@ -93,12 +108,23 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
         setSelectedResult(null);
 
         try {
-            const res = await neteaseApi.cloudSearch(q);
-            if (res.result?.songs) {
-                setSearchResults(res.result.songs);
-                // Preselect exact match roughly
-                const exactMatch = res.result.songs.find(s => s.name.toLowerCase() === song.name.toLowerCase());
-                if (exactMatch) setSelectedResult(exactMatch);
+            let results: SongResult[] = [];
+            if (source === 'netease') {
+                const res = await neteaseApi.cloudSearch(q);
+                results = res.result?.songs ?? [];
+            } else if (source === 'qq') {
+                results = await searchQQLyrics(q);
+            } else if (source === 'kugou') {
+                results = await searchKugouLyrics(q);
+            }
+            setSearchResults(results);
+
+            // Preselect exact match roughly
+            const exactMatch = results.find(s => s.name.toLowerCase() === song.name.toLowerCase());
+            if (exactMatch) {
+                setSelectedResult(exactMatch);
+            } else if (results.length > 0) {
+                setSelectedResult(results[0]);
             }
         } catch (error) {
             console.error('Search failed:', error);
@@ -109,10 +135,53 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
 
     // Auto search on mount
     useEffect(() => {
+        let isCurrent = true;
         const query = `${song.name} ${navidromeArtist}`.trim();
         setSearchQuery(query);
-        handleSearch(query);
-    }, [song]);
+        setIsSearching(true);
+        setSearchResults([]);
+        setSelectedResult(null);
+
+        void (async () => {
+            try {
+                let results: SongResult[] = [];
+                if (source === 'netease') {
+                    const res = await neteaseApi.cloudSearch(query);
+                    results = res.result?.songs ?? [];
+                } else if (source === 'qq') {
+                    results = await searchQQLyrics(query);
+                } else if (source === 'kugou') {
+                    results = await searchKugouLyrics(query);
+                }
+
+                if (!isCurrent) return;
+
+                setSearchResults(results);
+                const exactMatch = results.find(s => s.name.toLowerCase() === song.name.toLowerCase());
+                if (exactMatch) {
+                    setSelectedResult(exactMatch);
+                } else if (results.length > 0) {
+                    setSelectedResult(results[0]);
+                }
+            } catch (error) {
+                console.error('Search failed:', error);
+            } finally {
+                if (isCurrent) {
+                    setIsSearching(false);
+                }
+            }
+        })();
+
+        return () => {
+            isCurrent = false;
+        };
+    }, [song, source]);
+
+    useEffect(() => {
+        if (!enableAlternativeLyricSources && source !== 'netease') {
+            setSource('netease');
+        }
+    }, [enableAlternativeLyricSources, source]);
 
 
 
@@ -122,15 +191,30 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
         setIsMatching(true);
         try {
             // Always fetch lyrics
-            const lyricRes = await neteaseApi.getLyric(selectedResult.id);
-            const processed = await processNeteaseLyrics(
-                {
-                    type: 'netease',
-                    ...lyricRes
-                },
-                { songId: selectedResult.id }
-            );
-            const parsedLyrics: LyricData | null = processed.lyrics;
+            let processed: { lyrics: any; isPureMusic: boolean } | null = null;
+            if (source === 'netease') {
+                const lyricRes = await neteaseApi.getLyric(selectedResult.id);
+                processed = await processNeteaseLyrics(
+                    {
+                        type: 'netease',
+                        ...lyricRes
+                    },
+                    { songId: selectedResult.id }
+                );
+            } else if (source === 'qq') {
+                const parsedLyrics = await fetchQQLyrics(selectedResult);
+                processed = {
+                    lyrics: parsedLyrics,
+                    isPureMusic: false,
+                };
+            } else if (source === 'kugou') {
+                const parsedLyrics = await fetchKugouLyrics(selectedResult);
+                processed = {
+                    lyrics: parsedLyrics,
+                    isPureMusic: false,
+                };
+            }
+            const parsedLyrics: LyricData | null = processed ? processed.lyrics : null;
 
             const matchData: NavidromeMatchData = {
                 matchedSongId: selectedResult.id,
@@ -138,8 +222,14 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                 matchedIsPureMusic: processed.isPureMusic,
                 useOnlineLyrics: lyricsSource === 'online',
                 lyricsSource,
-                hasManualLyricSelection: true
+                hasManualLyricSelection: true,
+                matchedLyricsSource: source,
             };
+
+            if (source !== 'netease') {
+                matchData.useOnlineCover = false;
+                matchData.useOnlineMetadata = false;
+            }
 
             await saveToCache(`navidrome_match_${song.navidromeData.id}`, matchData);
 
@@ -187,6 +277,32 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                     {/* LEFT PANEL */}
                     <div className={`w-[62%] flex flex-col border-r ${borderColor}`}>
                         <div className="p-4">
+                            <div className={`flex border-b ${borderColor} pb-2 mb-3.5 gap-4`}>
+                                {[
+                                    { id: 'netease', label: '网易云音乐' },
+                                    ...(enableAlternativeLyricSources ? [
+                                        { id: 'qq', label: 'QQ 音乐' },
+                                        { id: 'kugou', label: '酷狗音乐' }
+                                    ] : [])
+                                ].map(t => {
+                                    const isSelected = source === t.id;
+                                    const activeTabClass = isSelected
+                                        ? isDaylight
+                                            ? 'border-blue-500 text-blue-600 font-semibold'
+                                            : 'border-blue-400 text-blue-300 font-semibold'
+                                        : 'border-transparent text-zinc-400 hover:text-zinc-200';
+                                    return (
+                                        <button
+                                            key={t.id}
+                                            type="button"
+                                            onClick={() => setSource(t.id as any)}
+                                            className={`pb-2 border-b-2 text-sm transition-all px-1 cursor-pointer ${activeTabClass}`}
+                                        >
+                                            {t.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
                             <form onSubmit={(e) => { e.preventDefault(); handleSearch(); }} className="relative">
                                 <input
                                     type="text"
@@ -218,7 +334,12 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                                                 {result.al?.picUrl ? <img src={result.al.picUrl.replace('http:', 'https:')} alt="" className="w-full h-full object-cover" /> : <Music size={16} className="opacity-20 m-auto" />}
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <div className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`text-sm font-semibold truncate ${textPrimary}`}>{formatSongName(result)}</span>
+                                                    <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
+                                                        {calculateMatchScore(songInfo, result)}%
+                                                    </span>
+                                                </div>
                                                 <div className={`text-xs truncate ${textSecondary}`}>{result.ar?.map(a => a.name).join(', ')} · {result.al?.name}</div>
                                             </div>
                                             {selectedResult?.id === result.id && <Check size={16} className="text-blue-400 flex-shrink-0" />}
@@ -242,11 +363,18 @@ const NaviLyricMatchModal: React.FC<NaviLyricMatchModalProps> = ({ song, onClose
                                     <div className={`text-sm opacity-40 ${textPrimary} mt-1`}>{navidromeAlbum}</div>
                                 </div>
                                 {selectedResult && (
-                                    <div className="flex items-center justify-center gap-2 pt-2">
-                                        <span className={`text-xs ${textSecondary}`}>匹配状态</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded-full ${lyricsSource === 'online' ? (isDaylight ? 'bg-blue-500/10 text-blue-600' : 'bg-blue-500/20 text-blue-300') : (isDaylight ? 'bg-orange-500/10 text-orange-600' : 'bg-orange-500/20 text-orange-300')}`}>
-                                            {lyricsSource === 'online' ? '优先使用在线歌词' : '强制回退服务器歌词'}
-                                        </span>
+                                    <div className="flex flex-col gap-2 pt-2 items-center">
+                                        {source !== 'netease' && (
+                                            <div className={`text-xs px-2.5 py-1 rounded-md max-w-[240px] text-center ${isDaylight ? 'bg-amber-50 text-amber-700' : 'bg-amber-950/40 text-amber-300 border border-amber-900/50'}`}>
+                                                {source === 'qq' ? 'QQ 音乐' : '酷狗音乐'}仅提供歌词，不覆盖封面与元数据
+                                            </div>
+                                        )}
+                                        <div className="flex items-center justify-center gap-2">
+                                            <span className={`text-xs ${textSecondary}`}>匹配状态</span>
+                                            <span className={`text-xs px-2 py-0.5 rounded-full ${lyricsSource === 'online' ? (isDaylight ? 'bg-blue-500/10 text-blue-600' : 'bg-blue-500/20 text-blue-300') : (isDaylight ? 'bg-orange-500/10 text-orange-600' : 'bg-orange-500/20 text-orange-300')}`}>
+                                                {lyricsSource === 'online' ? '优先使用在线歌词' : '强制回退服务器歌词'}
+                                            </span>
+                                        </div>
                                     </div>
                                 )}
                             </div>

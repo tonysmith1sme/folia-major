@@ -15,12 +15,38 @@ const KRC_KEY = new Uint8Array([
 async function decompressDeflate(bytes: Uint8Array): Promise<string> {
   const ds = new DecompressionStream('deflate');
   const writer = ds.writable.getWriter();
-  void writer.write(bytes);
-  void writer.close();
+  writer.write(bytes).catch(() => {});
+  writer.close().catch(() => {});
   
-  const response = new Response(ds.readable);
-  const arrayBuffer = await response.arrayBuffer();
-  return new TextDecoder('utf-8').decode(arrayBuffer);
+  const reader = ds.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        chunks.push(value);
+      }
+      if (done) {
+        break;
+      }
+    }
+  } catch (error) {
+    if (chunks.length === 0) {
+      throw error;
+    }
+    console.warn('DecompressionStream warning (ignored):', error);
+  } finally {
+    reader.releaseLock();
+  }
+  
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return new TextDecoder('utf-8').decode(result);
 }
 
 /**

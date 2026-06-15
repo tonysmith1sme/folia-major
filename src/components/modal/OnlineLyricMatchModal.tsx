@@ -9,6 +9,7 @@ import { loadOnlineLyricsState, saveOnlineLyricsState } from '../../utils/online
 import { searchQQLyrics, fetchQQLyrics } from '../../utils/lyrics/providers/qqLyricProvider';
 import { searchKugouLyrics, fetchKugouLyrics } from '../../utils/lyrics/providers/kugouLyricProvider';
 import { useSettingsUiStore } from '../../stores/useSettingsUiStore';
+import { calculateMatchScore } from '../../utils/lyrics/matchScore';
 
 // src/components/modal/OnlineLyricMatchModal.tsx
 
@@ -39,6 +40,15 @@ const OnlineLyricMatchModal: React.FC<OnlineLyricMatchModalProps> = ({ song, onC
     const [isSearching, setIsSearching] = useState(false);
     const [isMatching, setIsMatching] = useState(false);
     const [source, setSource] = useState<'netease' | 'qq' | 'kugou'>('netease');
+
+    const songInfo = React.useMemo(() => {
+        const artist = song.ar?.map(item => item.name).join(', ') || song.artists?.map(item => item.name).join(', ') || '';
+        return {
+            title: song.name || '',
+            artist,
+            durationMs: song.dt || song.duration || 0,
+        };
+    }, [song]);
 
     const handleSearch = async (query = searchQuery) => {
         if (!query.trim()) {
@@ -156,6 +166,7 @@ const OnlineLyricMatchModal: React.FC<OnlineLyricMatchModalProps> = ({ song, onC
                     onlineOverrideLyrics: processed.lyrics,
                     matchedSongId: selectedResult.id,
                     matchedIsPureMusic: processed.isPureMusic,
+                    matchedLyricsSource: source,
                 };
                 await saveOnlineLyricsState(song, nextState);
                 onMatch();
@@ -256,7 +267,12 @@ const OnlineLyricMatchModal: React.FC<OnlineLyricMatchModalProps> = ({ song, onC
                                             )}
                                         </div>
                                         <div className="min-w-0 flex-1">
-                                            <div className={`text-sm font-medium truncate ${textPrimary}`}>{formatSongName(result)}</div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-sm font-medium truncate ${textPrimary}`}>{formatSongName(result)}</span>
+                                                <span className="text-[10px] px-1.5 py-0.2 bg-blue-500/10 text-blue-400 rounded-md font-mono shrink-0">
+                                                    {calculateMatchScore(songInfo, result)}%
+                                                </span>
+                                            </div>
                                             <div className={`text-xs mt-1 truncate ${textSecondary}`}>{artist || '-'}</div>
                                             <div className={`text-xs mt-1 truncate ${textSecondary}`}>{result.al?.name || result.album?.name || '-'}</div>
                                         </div>
