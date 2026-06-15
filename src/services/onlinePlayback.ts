@@ -155,6 +155,7 @@ export async function loadOnlineSongLyrics(
             onAutoMatchStart?.();
             const artistName = song.artists?.map(a => a.name).join(', ') || '';
             const bestMatch = await autoMatchBestLyric(song.name, artistName, song.duration || song.dt || 0, {
+                album: song.album?.name || song.al?.name,
                 neteaseCandidate: {
                     id: song.id,
                     lyrics: parsedLyrics,

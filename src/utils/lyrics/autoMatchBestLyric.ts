@@ -1,15 +1,22 @@
-import { LyricData } from '../../types';
+import { LyricData, SongResult } from '../../types';
 import { neteaseApi } from '../../services/netease';
 import { processNeteaseLyrics } from './neteaseProcessing';
 import type { NeteaseChorusRange } from './chorusEffects';
 import { searchQQLyrics, fetchQQLyrics } from './providers/qqLyricProvider';
 import { searchKugouLyrics, fetchKugouLyrics } from './providers/kugouLyricProvider';
 import { normalizeLyricMatchDurationMs } from './duration';
+import { calculateMatchScore } from './matchScore';
 
 // src/utils/lyrics/autoMatchBestLyric.ts
 // Utility module for automatically matching the best word-by-word lyrics across multiple sources.
 
+const PROVIDER_SEARCH_TIMEOUT_MS = 3500;
+const PROVIDER_LYRIC_TIMEOUT_MS = 5000;
+const AUTO_MATCH_SEARCH_LIMIT = 10;
+const AUTO_MATCH_MIN_SCORE = 75;
+
 export interface AutoMatchBestLyricOptions {
+    album?: string;
     neteaseCandidate?: {
         id: number | string;
         lyrics: LyricData | null;
@@ -17,31 +24,58 @@ export interface AutoMatchBestLyricOptions {
     };
 }
 
-function normalizeTitle(title: string): string {
-    return title
-        .toLowerCase()
-        .trim()
-        .replace(/[^\w\s\u4e00-\u9fa5]/g, '') // Remove punctuation except Chinese characters
-        .replace(/\s+/g, ''); // Remove all whitespace
+function buildSearchQuery(title: string, artist: string, album?: string): string {
+    return [title, artist, album]
+        .map(part => part?.trim())
+        .filter((part): part is string => Boolean(part))
+        .join(' - ');
 }
 
-function isTitleMatch(localTitle: string, searchTitle: string): boolean {
-    const normalizedLocal = normalizeTitle(localTitle);
-    const normalizedSearch = normalizeTitle(searchTitle);
+function selectBestCandidate(
+    source: 'netease' | 'qq' | 'kugou',
+    songs: SongResult[],
+    target: { title: string; artist: string; durationMs: number }
+): SongResult | null {
+    const scored = songs
+        .slice(0, AUTO_MATCH_SEARCH_LIMIT)
+        .map(song => ({
+            song,
+            score: calculateMatchScore(target, song)
+        }))
+        .sort((a, b) => b.score - a.score);
 
-    if (normalizedLocal === normalizedSearch) {
-        return true;
+    const best = scored[0];
+    if (!best) {
+        return null;
     }
 
-    if (normalizedLocal.includes(normalizedSearch) || normalizedSearch.includes(normalizedLocal)) {
-        const minLength = Math.min(normalizedLocal.length, normalizedSearch.length);
-        const maxLength = Math.max(normalizedLocal.length, normalizedSearch.length);
-        if (minLength / maxLength >= 0.5) {
-            return true;
+    console.log(`[autoMatchBestLyric] Best ${source} candidate: "${best.song.name}" score=${best.score}`);
+    if (best.score < AUTO_MATCH_MIN_SCORE) {
+        console.log(`[autoMatchBestLyric] Skipping ${source} candidate because score ${best.score} is below ${AUTO_MATCH_MIN_SCORE}`);
+        return null;
+    }
+
+    return best.song;
+}
+
+// Bounds slow remote providers so one source cannot block the whole automatic match.
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, fallback: T): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((resolve) => {
+                timer = setTimeout(() => {
+                    console.warn(`[autoMatchBestLyric] ${label} timed out after ${timeoutMs}ms`);
+                    resolve(fallback);
+                }, timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timer) {
+            clearTimeout(timer);
         }
     }
-
-    return false;
 }
 
 /**
@@ -62,9 +96,10 @@ export async function autoMatchBestLyric(
     qqMid?: string;
     kgHash?: string;
 } | null> {
-    const searchQuery = artist ? `${artist} ${title}` : title;
+    const searchQuery = buildSearchQuery(title, artist, options.album);
     const normalizedDurationMs = normalizeLyricMatchDurationMs(durationMs);
     console.log(`[autoMatchBestLyric] Initiating best lyric auto-match for "${searchQuery}" (Duration: ${normalizedDurationMs}ms)`);
+    const targetSong = { title, artist, durationMs: normalizedDurationMs };
     let neteaseChorusRanges: NeteaseChorusRange[] = options.neteaseCandidate?.chorusRanges ?? [];
 
     // 1. NetEase Music
@@ -73,13 +108,15 @@ export async function autoMatchBestLyric(
         if (options.neteaseCandidate) {
             candidateSongs = [{ id: options.neteaseCandidate.id, name: title, ar: artist ? [{ name: artist }] : [] }];
         } else {
-            const neteaseSearchRes = await neteaseApi.cloudSearch(searchQuery);
+            const neteaseSearchRes = await withTimeout(
+                neteaseApi.cloudSearch(searchQuery, AUTO_MATCH_SEARCH_LIMIT),
+                PROVIDER_SEARCH_TIMEOUT_MS,
+                'NetEase search',
+                { result: { songs: [] } }
+            );
             const neteaseSongs = neteaseSearchRes.result?.songs || [];
-            // Filter top 5 results
-            candidateSongs = neteaseSongs.slice(0, 5).filter((s: any) => {
-                const songDuration = normalizeLyricMatchDurationMs(s.dt || s.duration || 0);
-                return Math.abs(songDuration - normalizedDurationMs) <= 3000 && isTitleMatch(title, s.name);
-            });
+            const bestCandidate = selectBestCandidate('netease', neteaseSongs, targetSong);
+            candidateSongs = bestCandidate ? [bestCandidate] : [];
         }
 
         for (const song of candidateSongs) {
@@ -89,16 +126,25 @@ export async function autoMatchBestLyric(
                     lyrics: options.neteaseCandidate.lyrics,
                     chorusRanges: options.neteaseCandidate.chorusRanges ?? []
                 }
-                : await (async () => {
-                    const lyricRes = await neteaseApi.getLyric(song.id);
-                    return processNeteaseLyrics(
-                        {
-                            type: 'netease',
-                            ...lyricRes
-                        },
-                        { songId: song.id }
-                    );
-                })();
+                : await withTimeout(
+                    (async () => {
+                        const lyricRes = await neteaseApi.getLyric(song.id);
+                        return processNeteaseLyrics(
+                            {
+                                type: 'netease',
+                                ...lyricRes
+                            },
+                            { songId: song.id }
+                        );
+                    })(),
+                    PROVIDER_LYRIC_TIMEOUT_MS,
+                    `NetEase lyric fetch for ${song.id}`,
+                    null
+                );
+
+            if (!processed) {
+                continue;
+            }
 
             if (processed.chorusRanges && processed.chorusRanges.length > 0) {
                 neteaseChorusRanges = processed.chorusRanges;
@@ -119,16 +165,23 @@ export async function autoMatchBestLyric(
 
     // 2. QQ Music
     try {
-        const qqSongs = await searchQQLyrics(searchQuery);
-        // Filter top 5 results
-        const candidateSongs = qqSongs.slice(0, 5).filter((s: any) => {
-            const songDuration = normalizeLyricMatchDurationMs(s.duration || 0);
-            return Math.abs(songDuration - normalizedDurationMs) <= 3000 && isTitleMatch(title, s.name);
-        });
+        const qqSongs = await withTimeout(
+            searchQQLyrics(searchQuery, 1, AUTO_MATCH_SEARCH_LIMIT),
+            PROVIDER_SEARCH_TIMEOUT_MS,
+            'QQ search',
+            []
+        );
+        const bestCandidate = selectBestCandidate('qq', qqSongs, targetSong);
+        const candidateSongs = bestCandidate ? [bestCandidate] : [];
 
         for (const song of candidateSongs) {
             console.log(`[autoMatchBestLyric] Checking QQ candidate: "${song.name}" by "${song.artists?.map((a: any) => a.name).join(', ')}"`);
-            const parsedLyrics = await fetchQQLyrics(song, { chorusRanges: neteaseChorusRanges });
+            const parsedLyrics = await withTimeout(
+                fetchQQLyrics(song, { chorusRanges: neteaseChorusRanges }),
+                PROVIDER_LYRIC_TIMEOUT_MS,
+                `QQ lyric fetch for ${song.id}`,
+                null
+            );
             if (parsedLyrics && parsedLyrics.isWordByWord) {
                 console.log(`[autoMatchBestLyric] Found perfect QQ word-by-word lyric match!`);
                 return {
@@ -145,16 +198,23 @@ export async function autoMatchBestLyric(
 
     // 3. Kugou Music
     try {
-        const kugouSongs = await searchKugouLyrics(searchQuery);
-        // Filter top 5 results
-        const candidateSongs = kugouSongs.slice(0, 5).filter((s: any) => {
-            const songDuration = normalizeLyricMatchDurationMs(s.duration || 0);
-            return Math.abs(songDuration - normalizedDurationMs) <= 3000 && isTitleMatch(title, s.name);
-        });
+        const kugouSongs = await withTimeout(
+            searchKugouLyrics(searchQuery, 1, AUTO_MATCH_SEARCH_LIMIT),
+            PROVIDER_SEARCH_TIMEOUT_MS,
+            'Kugou search',
+            []
+        );
+        const bestCandidate = selectBestCandidate('kugou', kugouSongs, targetSong);
+        const candidateSongs = bestCandidate ? [bestCandidate] : [];
 
         for (const song of candidateSongs) {
             console.log(`[autoMatchBestLyric] Checking Kugou candidate: "${song.name}" by "${song.artists?.map((a: any) => a.name).join(', ')}"`);
-            const parsedLyrics = await fetchKugouLyrics(song, { chorusRanges: neteaseChorusRanges });
+            const parsedLyrics = await withTimeout(
+                fetchKugouLyrics(song, { chorusRanges: neteaseChorusRanges }),
+                PROVIDER_LYRIC_TIMEOUT_MS,
+                `Kugou lyric fetch for ${song.id}`,
+                null
+            );
             if (parsedLyrics && parsedLyrics.isWordByWord) {
                 console.log(`[autoMatchBestLyric] Found perfect Kugou word-by-word lyric match!`);
                 return {

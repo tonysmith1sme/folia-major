@@ -623,11 +623,16 @@ export function useLibraryPlaybackController({
                         setStatusMsg({ type: 'info', text: t('status.loadingSong') || '加载歌曲中...' });
                         showedLoadingToast = true;
                     }
-                    const artistName = navidromeSong.artists?.[0]?.name || navidromeSong.ar?.[0]?.name || '';
+                    const artistName = navidromeSong.artists?.map(artist => artist.name).filter(Boolean).join(', ')
+                        || navidromeSong.ar?.map(artist => artist.name).filter(Boolean).join(', ')
+                        || '';
+                    const albumName = navidromeSong.album?.name || navidromeSong.al?.name || '';
                     const settings = useSettingsUiStore.getState();
 
                     if (settings.enableAlternativeLyricSources && settings.autoUseBestLyric) {
-                        const bestMatch = await autoMatchBestLyric(navidromeSong.name, artistName, navidromeSong.duration || navidromeSong.dt || 0);
+                        const bestMatch = await autoMatchBestLyric(navidromeSong.name, artistName, navidromeSong.duration || navidromeSong.dt || 0, {
+                            album: albumName
+                        });
                         if (bestMatch) {
                             nextLyrics = bestMatch.lyrics;
                             autoMatchedLyrics = bestMatch.lyrics;

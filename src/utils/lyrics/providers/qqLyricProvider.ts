@@ -88,8 +88,8 @@ function detectIsQrc(content: string): boolean {
 /**
  * Searches songs on QQ Music.
  */
-export async function searchQQLyrics(keyword: string, page = 1): Promise<SongResult[]> {
-  const pagesize = 20;
+export async function searchQQLyrics(keyword: string, page = 1, pageSize = 20): Promise<SongResult[]> {
+  const pagesize = pageSize;
   const param = {
     search_id: String(
       Math.floor(

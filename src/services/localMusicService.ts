@@ -1283,7 +1283,9 @@ export async function matchLyrics(song: LocalSong): Promise<LyricData | null> {
         const settings = useSettingsUiStore.getState();
         if (settings.enableAlternativeLyricSources && settings.autoUseBestLyric) {
             const cleanTitle = song.title || song.fileName.replace(/\.(mp3|flac|m4a|wav|ogg|opus|aac)$/i, '');
-            const bestMatch = await autoMatchBestLyric(cleanTitle, song.artist || '', song.duration);
+            const bestMatch = await autoMatchBestLyric(cleanTitle, song.artist || '', song.duration, {
+                album: song.album
+            });
             if (bestMatch) {
                 if (bestMatch.source === 'netease') {
                     song.matchedSongId = bestMatch.id as number;

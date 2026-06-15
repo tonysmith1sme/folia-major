@@ -99,8 +99,8 @@ async function requestKugou(url: string, params: Record<string, any>, module: st
 /**
  * Searches songs on Kugou.
  */
-export async function searchKugouLyrics(keyword: string, page = 1): Promise<SongResult[]> {
-  const pagesize = 20;
+export async function searchKugouLyrics(keyword: string, page = 1, pageSize = 20): Promise<SongResult[]> {
+  const pagesize = pageSize;
   const params = {
     sorttype: '0',
     keyword: keyword,
@@ -138,15 +138,15 @@ export async function searchKugouLyrics(keyword: string, page = 1): Promise<Song
     });
   } catch (error) {
     console.error('[Kugou] Search failed, trying old API:', error);
-    return await searchKugouLyricsOld(keyword, page);
+    return await searchKugouLyricsOld(keyword, page, pageSize);
   }
 }
 
 /**
  * Old/fallback search API for Kugou.
  */
-async function searchKugouLyricsOld(keyword: string, page = 1): Promise<SongResult[]> {
-  const pagesize = 20;
+async function searchKugouLyricsOld(keyword: string, page = 1, pageSize = 20): Promise<SongResult[]> {
+  const pagesize = pageSize;
   const url = 'http://mobiles.kugou.com/api/v3/search/song';
   const params = {
     showtype: '14',

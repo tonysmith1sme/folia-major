@@ -121,6 +121,47 @@ describe('autoMatchBestLyric', () => {
         expect(result?.qqMid).toBe('mid-night');
     });
 
+    it('scores the top 10 QQ results and fetches only the highest scoring candidate', async () => {
+        cloudSearchMock.mockResolvedValue({ result: { songs: [] } });
+        const distractors = [
+            { id: 200, name: 'Night Of Bloom (Starling Remix)', duration: 286000, artists: [{ id: 1, name: 'Xomu' }, { id: 2, name: 'StarlingEDM' }, { id: 3, name: 'nayuta' }], qqMid: 'remix' },
+            { id: 201, name: 'Night of Bloom', duration: 286000, artists: [{ id: 1, name: 'Ayrex' }], qqMid: 'wrong-artist-1' },
+            { id: 202, name: 'Night of Bloom', duration: 286000, artists: [{ id: 1, name: 'Nightcore Vibe' }], qqMid: 'wrong-artist-2' },
+            { id: 203, name: 'Night of Bloom (K歌版)', duration: 286000, artists: [{ id: 1, name: '東京都立中央精神病院院長' }], qqMid: 'karaoke' },
+            { id: 204, name: 'Night of Bloom remix', duration: 286000, artists: [{ id: 1, name: 'Gphuuuuuc' }], qqMid: 'remix-2' }
+        ];
+        const correct = {
+            id: 205,
+            name: 'Night of Bloom',
+            duration: 286000,
+            artists: [{ id: 1, name: 'Kirara Magic' }, { id: 2, name: 'Xomu' }, { id: 3, name: 'nayuta' }],
+            album: { id: 1, name: 'Night of Bloom' },
+            qqMid: 'correct-mid'
+        };
+        searchQQLyricsMock.mockResolvedValue([...distractors, correct]);
+        fetchQQLyricsMock.mockResolvedValue({ lines: [], isWordByWord: true });
+
+        const result = await autoMatchBestLyric(
+            'Night of Bloom (feat. nayuta)',
+            'Kirara Magic/Xomu/nayuta',
+            286000,
+            { album: 'Night of Bloom' }
+        );
+
+        expect(searchQQLyricsMock).toHaveBeenCalledWith(
+            'Night of Bloom (feat. nayuta) - Kirara Magic/Xomu/nayuta - Night of Bloom',
+            1,
+            10
+        );
+        expect(fetchQQLyricsMock).toHaveBeenCalledTimes(1);
+        expect(fetchQQLyricsMock).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 205, qqMid: 'correct-mid' }),
+            { chorusRanges: [] }
+        );
+        expect(result?.source).toBe('qq');
+        expect(result?.qqMid).toBe('correct-mid');
+    });
+
     it('applies NetEase API chorus ranges to a QQ best lyric match', async () => {
         cloudSearchMock.mockResolvedValue({
             result: {
