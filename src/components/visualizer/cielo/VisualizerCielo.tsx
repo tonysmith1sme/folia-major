@@ -6,6 +6,7 @@ import { type VisualizerSharedProps } from '../definition';
 import { DEFAULT_CIELO_TUNING } from '../../../types';
 import CieloBackground from './CieloBackground';
 import { colorWithAlpha } from '../colorMix';
+import { extractColors } from '../../../utils/colorExtractor';
 
 // A simple predictable random number generator based on a seed
 const sfc32 = (a: number, b: number, c: number, d: number) => {
@@ -38,7 +39,7 @@ interface LyricNodeState {
     id: string;
     worldY: number;
     worldX: number;
-    scale: number;
+    fontSize: number;
     opacity: number;
     active: boolean;
     isOutline: boolean;
@@ -57,26 +58,101 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
 
     const containerRef = useRef<HTMLDivElement>(null);
     const cameraY = useRef(0);
-    const lastTime = useRef(performance.now());
     const wordNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
-    const wordStatesRef = useRef<Map<string, LyricNodeState>>(new Map());
     
     // We only use React state for mounting/unmounting lines (discrete updates)
     const [activeLines, setActiveLines] = useState<number[]>([]);
+    const [coverColors, setCoverColors] = useState<string[]>([]);
+    
+    // Extract cover colors for diverse palette
+    useEffect(() => {
+        if (props.coverUrl) {
+            extractColors(props.coverUrl, 5).then(setCoverColors).catch(console.error);
+        } else {
+            setCoverColors([]);
+        }
+    }, [props.coverUrl]);
 
-    // We initialize a PRNG based on the song seed for consistent lyric placement
-    const prng = useMemo(() => {
+    // We initialize a PRNG based on the song seed for consistent lyric placement cascading without overlaps
+    const wordLayouts = useMemo(() => {
+        const layouts = new Map<string, { worldX: number, worldY: number, fontSize: number, opacity: number, isOutline: boolean }>();
         const hashStr = typeof seed === 'string' ? seed : seed.toString();
         const getHash = generateHashString(hashStr);
-        return sfc32(getHash(), getHash(), getHash(), getHash());
-    }, [seed]);
+        const localPrng = sfc32(getHash(), getHash(), getHash(), getHash());
+        
+        const SCROLL_SPEED = 250 * cieloTuning.cameraSpeed; // Much faster base speed
+        const width = 1200; // Reference width for generation
+        
+        const placedRects: { x: number, y: number, w: number, h: number }[] = [];
+        
+        lines.forEach((line, lineIndex) => {
+            const lineHash = generateHashString(seed + lineIndex.toString())();
+            // Stagger the line base X
+            const startX = width * 0.2 + (lineHash % 1000 / 1000) * width * 0.6;
+            
+            line.words.forEach((word, wordIndex) => {
+                const wordId = `${lineIndex}_${wordIndex}`;
+                
+                let baseTimeY = word.startTime * SCROLL_SPEED;
+                
+                const isHuge = localPrng() > 0.85;
+                const isOutline = localPrng() > 0.7;
+                // Directly use fontSize instead of scale to avoid blurry WebKit transform rasterization
+                const fontSize = isHuge ? 150 + localPrng() * 100 : 50 + localPrng() * 50;
+                
+                // Estimated bounding box
+                const estW = word.text.length * fontSize * 1.1;
+                const estH = fontSize * 1.2;
+                
+                let bestX = startX;
+                let bestY = baseTimeY;
+                let minOverlap = Infinity;
+                
+                // Collision avoidance: try 15 random offset candidates and pick the one with minimal overlap
+                for (let i = 0; i < 15; i++) {
+                    const testX = startX + (localPrng() - 0.5) * 800;
+                    const testY = baseTimeY + (localPrng() - 0.5) * 80; // Allow slight Y jitter
+                    
+                    let overlapArea = 0;
+                    for (const rect of placedRects) {
+                        // Fast vertical bounding check
+                        if (Math.abs(rect.y - testY) < (rect.h + estH)) {
+                            const dx = Math.max(0, Math.min(testX + estW/2, rect.x + rect.w/2) - Math.max(testX - estW/2, rect.x - rect.w/2));
+                            const dy = Math.max(0, Math.min(testY + estH/2, rect.y + rect.h/2) - Math.max(testY - estH/2, rect.y - rect.h/2));
+                            overlapArea += dx * dy;
+                        }
+                    }
+                    if (overlapArea === 0) {
+                        bestX = testX;
+                        bestY = testY;
+                        break; // Perfect placement found
+                    }
+                    if (overlapArea < minOverlap) {
+                        minOverlap = overlapArea;
+                        bestX = testX;
+                        bestY = testY;
+                    }
+                }
+                
+                placedRects.push({ x: bestX, y: bestY, w: estW, h: estH });
+                
+                layouts.set(wordId, {
+                    worldY: bestY,
+                    worldX: bestX,
+                    fontSize,
+                    opacity: isOutline ? 0.8 : 0.4 + localPrng() * 0.4,
+                    isOutline
+                });
+            });
+        });
+        return layouts;
+    }, [lines, seed, cieloTuning.cameraSpeed]);
 
     // Update active lines based on currentTime (discrete updates, roughly every few seconds)
     useMotionValueEvent(currentTime, 'change', (time) => {
-        const PRE_TIME = 4.0; // Render 4 seconds before
-        // The camera scrolls very slowly (60px/s). Staggered text might take up to 3000px height.
-        // We need a massive POST_TIME to ensure words are not unmounted before they scroll off the top edge.
-        const POST_TIME = 45.0; 
+        // Massive time windows to ensure words spawn completely off-screen and scroll all the way out
+        const PRE_TIME = 15.0; 
+        const POST_TIME = 15.0; 
         
         const newActiveLines: number[] = [];
         for (let i = 0; i < lines.length; i++) {
@@ -103,60 +179,35 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
     useEffect(() => {
         let rafId: number;
 
-        const loop = (now: number) => {
-            const dt = Math.min(now - lastTime.current, 50) / 1000;
-            lastTime.current = now;
-
-            const power = audioPower.get();
-            const speedMultiplier = cieloTuning.cameraSpeed;
-            // Base speed: calm, smooth MG pan. Remove audio from deltaY to prevent jittery scrolling.
-            const deltaY = dt * 60 * speedMultiplier;
-            cameraY.current += deltaY;
+        const loop = () => {
+            const time = currentTime.get();
+            // Must match the useMemo SCROLL_SPEED perfectly!
+            const SCROLL_SPEED = 250 * cieloTuning.cameraSpeed;
+            
+            // CameraY is strictly bound to the timeline!
+            cameraY.current = time * SCROLL_SPEED;
 
             // Update DOM Lyrics
             const height = containerRef.current?.clientHeight ?? 800;
-            const width = containerRef.current?.clientWidth ?? 1200;
 
             activeLines.forEach(lineIndex => {
                 const line = lines[lineIndex];
                 line.words.forEach((word, wordIndex) => {
                     const wordId = `${lineIndex}_${wordIndex}`;
-                    let state = wordStatesRef.current.get(wordId);
-                    if (!state) {
-                        // Cascading Typography Layout
-                        // Generate a consistent base X for the whole line
-                        const lineHash = generateHashString(seed + lineIndex.toString())();
-                        const startX = width * 0.2 + (lineHash % 1000 / 1000) * width * 0.5;
-                        const startY = cameraY.current + height * 0.8 + 100;
-                        
-                        // Strict vertical spacing to prevent overlaps
-                        const offsetY = wordIndex * 160; 
-                        // Random X jitter around the line's base X
-                        const offsetX = (prng() - 0.5) * 300; 
-                        
-                        const isHuge = prng() > 0.85;
-                        const isOutline = prng() > 0.7;
-                        
-                        state = {
-                            id: wordId,
-                            worldY: startY + offsetY,
-                            worldX: startX + offsetX,
-                            scale: isHuge ? 4.0 + prng() * 1.5 : 1.5 + prng() * 1.5,
-                            opacity: isOutline ? 0.8 : 0.4 + prng() * 0.4,
-                            active: true,
-                            isOutline
-                        };
-                        wordStatesRef.current.set(wordId, state);
-                    }
+                    const layout = wordLayouts.get(wordId);
+                    if (!layout) return;
 
                     const domNode = wordNodesRef.current.get(wordId);
                     if (domNode) {
-                        // screenY = worldY - cameraY
-                        const screenY = state.worldY - cameraY.current;
-                        domNode.style.transform = `translate3d(${state.worldX}px, ${screenY}px, 0) scale(${state.scale})`;
-                        domNode.style.opacity = `${state.opacity}`;
-                        // We apply styles here since state might not be available during initial render map
-                        if (state.isOutline) {
+                        // Offset by height * 0.35 so the word crosses the upper-middle of screen exactly when sung
+                        const screenY = layout.worldY - cameraY.current + (height * 0.35);
+                        
+                        // Transform without scale to guarantee crisp vector rendering!
+                        domNode.style.transform = `translate3d(${layout.worldX}px, ${screenY}px, 0)`;
+                        domNode.style.fontSize = `${layout.fontSize}px`;
+                        domNode.style.opacity = `${layout.opacity}`;
+                        
+                        if (layout.isOutline) {
                             domNode.style.color = 'transparent';
                             domNode.style.WebkitTextStroke = `2px ${theme.primaryColor}`;
                         } else {
@@ -172,17 +223,18 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
 
         rafId = requestAnimationFrame(loop);
         return () => cancelAnimationFrame(rafId);
-    }, [activeLines, audioPower, cieloTuning.cameraSpeed, prng]);
+    }, [activeLines, cieloTuning.cameraSpeed, currentTime, theme.primaryColor, wordLayouts]);
 
     return (
         <VisualizerShell {...props}>
             <div ref={containerRef} className="absolute inset-0 overflow-hidden pointer-events-none">
                 {/* Background WebGL Shader layer */}
                 <CieloBackground 
-                    cameraYRef={cameraY}
+                    currentTime={currentTime}
                     audioPower={audioPower}
                     audioBands={audioBands}
                     theme={theme}
+                    coverColors={coverColors}
                     tuning={cieloTuning}
                 />
 
@@ -199,7 +251,7 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
                                         if (el) wordNodesRef.current.set(wordId, el);
                                         else wordNodesRef.current.delete(wordId);
                                     }}
-                                    className="absolute top-0 left-0 text-5xl font-black tracking-widest origin-center whitespace-nowrap"
+                                    className="absolute top-0 left-0 font-black tracking-widest origin-center whitespace-nowrap"
                                     style={{
                                         // Color is handled in the RAF loop to match state
                                         willChange: 'transform',
