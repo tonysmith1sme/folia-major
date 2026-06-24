@@ -201,22 +201,66 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
                     if (domNode) {
                         // Offset by height * 0.35 so the word crosses the upper-middle of screen exactly when sung
                         const screenY = layout.worldY - cameraY.current + (height * 0.35);
+                        const baseTransform = `translate3d(${layout.worldX}px, ${screenY}px, 0)`;
                         
-                        // Transform without scale to guarantee crisp vector rendering!
-                        domNode.style.transform = `translate3d(${layout.worldX}px, ${screenY}px, 0)`;
-                        domNode.style.fontSize = `${layout.fontSize}px`;
-                        domNode.style.opacity = `${layout.opacity}`;
+                        // We must apply ALL styles (transform, color, opacity) to the children, NOT the parent!
+                        // If the parent has any transform or opacity, it creates an isolated stacking context,
+                        // which breaks mix-blend-mode: difference from reaching the WebGL canvas!
+                        const bgNode = domNode.firstElementChild as HTMLElement | null;
+                        const textNode = domNode.firstElementChild?.nextElementSibling as HTMLElement | null;
                         
-                        if (layout.isOutline) {
-                            domNode.style.color = 'transparent';
-                            domNode.style.WebkitTextStroke = `2px ${theme.primaryColor}`;
-                        } else {
-                            domNode.style.color = theme.primaryColor;
-                            domNode.style.WebkitTextStroke = 'none';
+                        if (textNode) {
+                            textNode.style.transform = baseTransform;
+                            textNode.style.fontSize = `${layout.fontSize}px`;
+                            textNode.style.opacity = `${layout.opacity}`;
+                            if (layout.isOutline) {
+                                textNode.style.color = 'transparent';
+                                textNode.style.WebkitTextStroke = `2px ${theme.primaryColor}`;
+                            } else {
+                                textNode.style.color = theme.primaryColor;
+                                textNode.style.WebkitTextStroke = 'none';
+                            }
                         }
                         
-                        // Apply CSS blend mode so the text dynamically inverts against the WebGL shapes
-                        domNode.style.mixBlendMode = 'difference';
+                        if (bgNode) {
+                            let bgOpacity = 0;
+                            let bgTransform = '';
+                            
+                            // Deterministic random direction for fly-in/fly-out per word
+                            const rawHash = Math.sin(wordIndex * 12.9898 + lineIndex * 78.233) * 43758.5453;
+                            const hash = rawHash - Math.floor(rawHash);
+                            const angle = hash * Math.PI * 2;
+                            const distance = 30; // max fly distance
+                            const dx = Math.cos(angle) * distance;
+                            const dy = Math.sin(angle) * distance;
+                            
+                            if (time >= word.startTime && time <= word.endTime) {
+                                // Active - Entering / Sung
+                                const duration = word.endTime - word.startTime;
+                                const enterDuration = Math.min(0.25, duration);
+                                const enterProgress = enterDuration > 0 ? Math.min(1.0, (time - word.startTime) / enterDuration) : 1.0;
+                                
+                                // easeOutCubic
+                                const easeOut = 1 - Math.pow(1 - enterProgress, 3);
+                                
+                                bgOpacity = enterProgress;
+                                // Flies in from offset to 0
+                                bgTransform = `translate3d(${dx * (1 - easeOut)}px, ${dy * (1 - easeOut)}px, 0) scale(${0.8 + 0.2 * easeOut})`;
+                            } else if (time > word.endTime && time < word.endTime + 0.4) {
+                                // Exiting
+                                const exitProgress = (time - word.endTime) / 0.4;
+                                
+                                bgOpacity = 1.0 - exitProgress;
+                                // No fly-out, just stay in place
+                                bgTransform = 'translate3d(0px, 0px, 0px) scale(1.0)';
+                            }
+                            
+                            // Multiply by layout.opacity to respect global distance fading
+                            bgNode.style.opacity = `${bgOpacity * layout.opacity}`;
+                            bgNode.style.fontSize = `${layout.fontSize}px`;
+                            // Compose the base position with the fly-in animation
+                            bgNode.style.transform = `${baseTransform} ${bgTransform}`;
+                        }
                     }
                 });
             });
@@ -254,13 +298,12 @@ export const VisualizerCielo: React.FC<VisualizerSharedProps> = (props) => {
                                         if (el) wordNodesRef.current.set(wordId, el);
                                         else wordNodesRef.current.delete(wordId);
                                     }}
-                                    className="absolute top-0 left-0 font-black tracking-widest origin-center whitespace-nowrap"
-                                    style={{
-                                        // Color is handled in the RAF loop to match state
-                                        willChange: 'transform',
-                                    }}
+                                    className="absolute top-0 left-0" // NO stacking context properties here!
                                 >
-                                    {word.text}
+                                    {/* The background box. Uses theme.backgroundColor for high contrast against text. */}
+                                    <div className="word-bg-box absolute inset-[-0.1em] rounded-sm pointer-events-none origin-center" style={{ backgroundColor: theme.backgroundColor, opacity: 0, willChange: 'transform, opacity' }} />
+                                    {/* The text */}
+                                    <div className="word-text relative z-10 font-black tracking-widest origin-center whitespace-nowrap" style={{ mixBlendMode: 'difference', willChange: 'transform, opacity' }}>{word.text}</div>
                                 </div>
                             );
                         });

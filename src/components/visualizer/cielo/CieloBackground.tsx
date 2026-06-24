@@ -93,8 +93,9 @@ const fragmentShader = `
         vec2 cellCId = floor(cellC);
         vec2 cellCUv = fract(cellC) - 0.5;
         
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
+        // Expand search radius to -2 to 2 to prevent large arcs from being clipped at cell boundaries
+        for (int y = -2; y <= 2; y++) {
+            for (int x = -2; x <= 2; x++) {
                 vec2 nOffset = vec2(float(x), float(y));
                 vec2 nId = cellCId + nOffset;
                 float hc = hash21(nId + 8.0);
@@ -105,7 +106,8 @@ const fragmentShader = `
                     
                     float entrance = clamp((u_cameraY + cssResolution.y - nId.y * gridC) / (cssResolution.y * 0.5), 0.0, 1.0);
                     
-                    float radius = 0.3 + hc * 1.5;
+                    // Cap radius at 1.95 to guarantee it never exceeds the -2 to 2 grid search bounds
+                    float radius = min(0.3 + hc * 1.5, 1.95);
                     float distCenter = length(localUv);
                     float dist = abs(distCenter - radius);
                     
@@ -116,13 +118,15 @@ const fragmentShader = `
                     float angle = atan(localUv.y, localUv.x);
                     float sweep = smoothstep(-3.14, 3.14, angle);
                     
-                    if (sweep < entrance) {
+                    if (entrance >= 1.0 || sweep < entrance) {
                         vec3 cCol = getPaletteColor(hc * 13.0);
                         
                         // The bright solid arc stroke
                         if (dist < thickness + aaC) {
                             float mask = smoothstep(thickness + aaC, thickness - aaC, dist);
-                            col = mix(col, cCol, mask * 0.9);
+                            // Smoothly fade the leading edge of the sweep to remove the harsh glitch cut
+                            float tipMask = entrance >= 1.0 ? 1.0 : smoothstep(entrance, entrance - 0.05, sweep);
+                            col = mix(col, cCol, mask * tipMask * 0.9);
                         }
                     }
                 }
@@ -227,8 +231,9 @@ const fragmentShader = `
 
         // --- LAYER 4: Sweeping Adjustment Layers (Filled Circles) ---
         // Re-iterate the gridC to draw the fills ON TOP of all other shapes, acting like AE Adjustment Layers
-        for (int y = -1; y <= 1; y++) {
-            for (int x = -1; x <= 1; x++) {
+        // Expanded to 5x5 grid search (-2 to 2) to match Layer 1 and prevent cutoff
+        for (int y = -2; y <= 2; y++) {
+            for (int x = -2; x <= 2; x++) {
                 vec2 nOffset = vec2(float(x), float(y));
                 vec2 nId = cellCId + nOffset;
                 float hc = hash21(nId + 8.0);
@@ -239,14 +244,16 @@ const fragmentShader = `
                     
                     float entrance = clamp((u_cameraY + cssResolution.y - nId.y * gridC) / (cssResolution.y * 0.5), 0.0, 1.0);
                     
-                    float radius = 0.3 + hc * 1.5;
+                    // Cap radius at 1.95 to guarantee it never exceeds the -2 to 2 grid search bounds
+                    float radius = min(0.3 + hc * 1.5, 1.95);
                     float distCenter = length(localUv);
                     
                     float angle = atan(localUv.y, localUv.x);
                     float sweep = smoothstep(-3.14, 3.14, angle);
                     
-                    if (sweep < entrance && distCenter < radius + aaC) {
+                    if ((entrance >= 1.0 || sweep < entrance) && distCenter < radius + aaC) {
                         float fillMask = smoothstep(radius + aaC, radius - aaC, distCenter);
+                        float tipMask = entrance >= 1.0 ? 1.0 : smoothstep(entrance, entrance - 0.05, sweep);
                         
                         // Pick a random blend mode for this adjustment layer
                         float blendType = hash21(nId + 77.0);
@@ -270,7 +277,7 @@ const fragmentShader = `
                         
                         // Apply the adjustment layer with variable opacity
                         float opacity = 0.6 + hash21(nId + 99.0) * 0.4;
-                        col = mix(col, blendedCol, fillMask * opacity);
+                        col = mix(col, blendedCol, fillMask * tipMask * opacity);
                     }
                 }
             }
